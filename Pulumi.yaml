@@ -1,0 +1,231 @@
+name: oke-cluster
+runtime: yaml
+description: A Pulumi YAML program to deploy OKE
+
+resources:
+  clusterVcn:
+    type: oci:Core:Vcn
+    properties:
+      compartmentId: ${compartmentId}
+      cidrBlock: "10.0.0.0/16"
+      displayName: "oke-vcn-oke-cluster"
+      dnsLabel: "clustervcn"
+
+  nodeSecurityList:
+    type: oci:Core:SecurityList
+    properties:
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "oke-node-security-list"
+      ingressSecurityRules:
+      - protocol: all
+        sourceType: "CIDR_BLOCK"
+        source: 10.0.0.0/16
+      - protocol: "1"
+        sourceType: "CIDR_BLOCK"
+        source: "10.0.0.0/16"
+        icmpOptions:
+          type: 3
+          code: 4
+      egressSecurityRules:
+      - protocol: all
+        destinationType: "CIDR_BLOCK"
+        destination: "0.0.0.0/0"
+        description: "Allow egress access"
+      - protocol: "1"
+        destinationType: "CIDR_BLOCK"
+        destination: "10.0.0.0/16"
+        icmpOptions:
+          type: 3
+          code: 4
+
+  k8sApiSecurityList:
+    type: oci:Core:SecurityList
+    properties:
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "oke-API-security-list"
+      ingressSecurityRules:
+      - protocol: "all"
+        sourceType: "CIDR_BLOCK"
+        source: 10.0.0.0/16
+      - protocol: "6"
+        sourceType: "CIDR_BLOCK"
+        source: "0.0.0.0/0"
+        tcpOptions:
+          min: 6443
+          max: 6443
+      - protocol: "1"
+        sourceType: "CIDR_BLOCK"
+        source: "10.0.0.0/16"
+        icmpOptions:
+          type: 3
+          code: 4
+      egressSecurityRules:
+      - protocol: "all"
+        destinationType: "CIDR_BLOCK"
+        destination: "0.0.0.0/0"
+        description: "Allow egress access"
+  
+  k8sServiceLbSecurityList:
+    type: oci:Core:SecurityList
+    properties:
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "oke-ServiceLb-security-list"
+      ingressSecurityRules:
+      - protocol: "all"
+        sourceType: "CIDR_BLOCK"
+        source: "10.0.0.0/16"
+      - protocol: "6"
+        sourceType: "CIDR_BLOCK"
+        source: "0.0.0.0/0"
+        tcpOptions:
+          min: 80
+          max: 80
+
+  k8sNodeSubnet:
+    type: oci:Core:Subnet
+    properties:
+      cidrBlock: "10.0.0.0/24"
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "oke-node-subnet"
+      dnsLabel: "nodesubnet"
+      prohibitPublicIpOnVnic: true
+      securityListIds:
+      - ${nodeSecurityList.id}
+      routeTableId: ${k8sPrivRouteTable.id}
+
+  k8sApiSubnet:
+    type: oci:Core:Subnet
+    properties:
+      cidrBlock: "10.0.10.0/28"
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "oke-api-subnet"
+      dnsLabel: "apisubnet"
+      securityListIds:
+      - ${k8sApiSecurityList.id}
+      routeTableId: ${k8sRouteTable.id}
+
+  k8sSvcLbSubnet:
+    type: oci:Core:Subnet
+    properties:
+      cidrBlock: "10.0.20.0/24"
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "oke-lb-subnet"
+      dnsLabel: "lbsubnet"
+      securityListIds:
+      - ${k8sServiceLbSecurityList.id}
+      routeTableId: ${k8sRouteTable.id}
+
+  k8sInternetGateway:
+    type: oci:Core:InternetGateway
+    properties:
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "k8s-igw"
+      enabled: true
+
+  k8sNatGateway:
+    type: oci:Core:NatGateway
+    properties:
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "k8s-ngw"
+
+  k8sRouteTable:
+    type: oci:Core:RouteTable
+    properties:
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "cluster-route-table-pub"
+      routeRules:
+      - destination: "0.0.0.0/0"
+        networkEntityId: ${k8sInternetGateway.id}
+
+  k8sPrivRouteTable:
+    type: oci:Core:RouteTable
+    properties:
+      compartmentId: ${compartmentId}
+      vcnId: ${clusterVcn.id}
+      displayName: "cluster-route-table-priv"
+      routeRules:
+      - destination: "0.0.0.0/0"
+        networkEntityId: ${k8sNatGateway.id}
+
+  okeCluster:
+    type: oci:ContainerEngine:Cluster
+    name: "oke-cluster-oke-cluster"
+    properties:
+      compartmentId: ${compartmentId}
+      kubernetesVersion: ${kubernetesVersion}
+      name: "oke-cluster-01"
+      vcnId: ${clusterVcn.id}
+      clusterPodNetworkOptions:
+        - cniType: "OCI_VCN_IP_NATIVE"
+      endpointConfig:
+        isPublicIpEnabled: true
+        subnetId: ${k8sApiSubnet.id}
+      options:
+        kubernetesNetworkConfig:
+          podsCidr: "10.244.0.0/16"
+          servicesCidr: "10.96.0.0/16"
+        serviceLbSubnetIds: 
+        - ${k8sSvcLbSubnet.id}
+      type: "ENHANCED_CLUSTER"
+
+  okeNodePool:
+    type: oci:ContainerEngine:NodePool
+    name: "node-pool-01"
+    properties:
+      clusterId: ${okeCluster.id}
+      compartmentId: ${compartmentId}
+      name: "node-pool-01"
+      nodeShape: "VM.Standard.E3.Flex"
+      kubernetesVersion: ${kubernetesVersion}
+      nodeConfigDetails:
+        placementConfigs:
+          - availabilityDomain: ${clusterAvailabilityDomains.availabilityDomains[0].name}
+            subnetId: ${k8sNodeSubnet.id}
+        size: 1
+        nodePoolPodNetworkOptionDetails:
+          cniType: "OCI_VCN_IP_NATIVE"
+          podSubnetIds:
+            - ${k8sNodeSubnet.id}
+      nodeSourceDetails:
+        imageId: ${osImageOcid.images[1].id}
+        sourceType: "IMAGE"
+        bootVolumeSizeInGbs: 60
+      nodeShapeConfig:
+        memoryInGbs: 16
+        ocpus: 1
+
+variables:
+  compartmentId: ocid1.compartment.oc1..aaaaaaaazirnqfa2cqcihnqkwkznvfdnubw2t4tmbqwlrc3c2bqjcxbdai6a
+  kubernetesVersion: "v1.30.1"
+  namespace:
+    fn::oci:ObjectStorage/getNamespace:getNamespace:
+
+  clusterAvailabilityDomains:
+    fn::oci:Identity/getAvailabilityDomains:getAvailabilityDomains:
+      compartmentId: ${compartmentId}
+
+  osImageOcid:
+    fn::invoke:
+      function: oci:Core:getImages
+      arguments:
+        compartmentId: ${compartmentId}
+        operatingSystem: "Oracle Linux"
+        operatingSystemVersion: "8"
+        shape: "VM.Standard.E3.Flex"
+        sortBy: "TIMECREATED"
+        sortOrder: "DESC"
+
+
+outputs:
+  okeClusterId: ${okeCluster.id}
+  okeNodePool: ${okeNodePool.id}
+  okeClusterPubIP: ${okeCluster.endpoints[0].publicEndpoint}

@@ -1,0 +1,11 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: oke-cluster
+  description: Stack for oke-cluster
+  annotations:
+    pulumi.com/project-slug: elischilling/oke-cluster/Development
+spec:
+  owner: group:default/development
+  type: service
+  lifecycle: experimental
